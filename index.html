@@ -6,280 +6,457 @@
 <p><button id="downloadButton">Download My Result!!</button></p>
 <h2>How does it work?</h2>
 <p>Your source file will be sliced to 1 second, because it takes one second before the instrumental starts. When the instrumental starts, your source file will be sliced into 0.5 second pieces.</p>
+<h2>What if i want the source file to be played differently?</h2>
+<p>Get one hundred bucks and buy FL Studio.</p>
 <script>
-	const filePicker = document.getElementById("filePicker");
-	const downloadButton = document.querySelector("button");
+const filePicker = document.getElementById("filePicker");
+const downloadButton = document.querySelector("button");
 
-	let resultBlob = null;
+let resultBlob = null;
 
-	filePicker.addEventListener("change", async () => {
-		const file = filePicker.files[0];
-		if (!file) return;
+filePicker.addEventListener("change", async () => {
+    const file = filePicker.files[0];
 
-		try {
-			downloadButton.disabled = true;
-			downloadButton.textContent = "Generating...";
+    if (!file) return;
 
-			const audioContext = new AudioContext();
+    try {
+        downloadButton.disabled = true;
+        downloadButton.textContent = "Generating...";
 
-			// Load source MP3
-			const sourceBuffer = await file.arrayBuffer();
-			const sourceAudio =
-				await audioContext.decodeAudioData(sourceBuffer);
+        const audioContext = new AudioContext();
 
-			// Load vanillaBase.mp3
-			const baseResponse = await fetch("vanillaBase.mp3");
-			if (!baseResponse.ok)
-				throw new Error("Could not load vanillaBase.mp3");
+        // Load uploaded source
+        const sourceArrayBuffer = await file.arrayBuffer();
 
-			const baseBuffer = await baseResponse.arrayBuffer();
-			const baseAudio =
-				await audioContext.decodeAudioData(baseBuffer);
+        // Load vanillaBase.mp3
+        const baseResponse = await fetch("vanillaBase.mp3");
 
-			const sampleRate = baseAudio.sampleRate;
+        if (!baseResponse.ok) {
+            throw new Error("Could not load vanillaBase.mp3");
+        }
 
-			// Result is exactly as long as vanillaBase.mp3
-			const channels = Math.max(
-				sourceAudio.numberOfChannels,
-				baseAudio.numberOfChannels
-			);
+        const baseArrayBuffer = await baseResponse.arrayBuffer();
 
-			const output = audioContext.createBuffer(
-				channels,
-				baseAudio.length,
-				sampleRate
-			);
+        // Decode both
+        const sourceAudio =
+            await audioContext.decodeAudioData(sourceArrayBuffer);
 
-			// Copy vanillaBase.mp3 unchanged
-			for (let ch = 0; ch < channels; ch++) {
-				const out = output.getChannelData(ch);
-				const base = baseAudio.getChannelData(
-					Math.min(ch, baseAudio.numberOfChannels - 1)
-				);
+        const baseAudio =
+            await audioContext.decodeAudioData(baseArrayBuffer);
 
-				for (let i = 0; i < baseAudio.length; i++) {
-					out[i] = base[i];
-				}
-			}
+        const sampleRate = baseAudio.sampleRate;
 
-			// ---------------------------------------------
-			// SOURCE:
-			// first 1 second
-			// THEN 0.5 second chunks
-			// ---------------------------------------------
+        // Result is exactly the length of vanillaBase.mp3
+        const channels = Math.max(
+            sourceAudio.numberOfChannels,
+            baseAudio.numberOfChannels
+        );
 
-			let sourcePosition = 0;
-			let outputPosition = 0;
+        const output = audioContext.createBuffer(
+            channels,
+            baseAudio.length,
+            sampleRate
+        );
 
-			const firstSecond =
-				Math.floor(sourceAudio.sampleRate * 1);
+        // --------------------------------------------------
+        // COPY VANILLABASE UNCHANGED
+        // --------------------------------------------------
 
-			const halfSecond =
-				Math.floor(sourceAudio.sampleRate * 0.5);
+        for (let ch = 0; ch < channels; ch++) {
+            const outputData = output.getChannelData(ch);
 
-			function mixSamples(length) {
-				const sourceStart = sourcePosition;
+            const baseData = baseAudio.getChannelData(
+                Math.min(
+                    ch,
+                    baseAudio.numberOfChannels - 1
+                )
+            );
 
-				for (
-					let i = 0;
-					i < length && outputPosition < output.length;
-					i++
-				) {
-					const sourceIndex =
-						sourceStart + i;
+            for (let i = 0; i < baseAudio.length; i++) {
+                outputData[i] = baseData[i];
+            }
+        }
 
-					if (sourceIndex >= sourceAudio.length)
-						break;
+        // --------------------------------------------------
+        // SOURCE PROCESSING
+        //
+        // First:
+        //     entire first 1 second
+        //
+        // Then:
+        //     ONLY the last 0.5 seconds of that 1 second
+        //     repeated until vanillaBase ends.
+        // --------------------------------------------------
 
-					const outputIndex =
-						outputPosition +
-						Math.floor(
-							i *
-							sampleRate /
-							sourceAudio.sampleRate
-						);
+        const sourceRate = sourceAudio.sampleRate;
 
-					if (outputIndex >= output.length)
-						break;
+        const oneSecond =
+            Math.floor(sourceRate * 1.0);
 
-					for (let ch = 0; ch < channels; ch++) {
-						const source =
-							sourceAudio.getChannelData(
-								Math.min(
-									ch,
-									sourceAudio.numberOfChannels - 1
-								)
-							);
+        const halfSecond =
+            Math.floor(sourceRate * 0.5);
 
-						const out =
-							output.getChannelData(ch);
+        if (sourceAudio.length < oneSecond) {
+            throw new Error(
+                "The source MP3 must be at least 1 second long."
+            );
+        }
 
-						// Mix source over vanillaBase
-						out[outputIndex] +=
-							source[sourceIndex] * 0.8;
-					}
-				}
+        // The repeating section is:
+        //
+        // source[0.5s ... 1.0s]
+        //
+        const repeatStart = halfSecond;
 
-				sourcePosition += length;
+        // --------------------------------------------------
+        // FIRST: PLAY THE FIRST 1 SECOND
+        // --------------------------------------------------
 
-				outputPosition += Math.floor(
-					length *
-					sampleRate /
-					sourceAudio.sampleRate
-				);
-			}
+        for (
+            let i = 0;
+            i < oneSecond;
+            i++
+        ) {
+            const outputIndex =
+                Math.floor(
+                    i *
+                    sampleRate /
+                    sourceRate
+                );
 
-			// FIRST: 1 second
-			mixSamples(firstSecond);
+            if (outputIndex >= output.length)
+                break;
 
-			// THEN: 0.5 second chunks
-			while (outputPosition < output.length) {
+            const sourceIndex = i;
 
-				// Restart the 0.5-second section when
-				// the source reaches its end.
-				if (
-					sourcePosition + halfSecond >
-					sourceAudio.length
-				) {
-					sourcePosition = firstSecond;
-				}
+            for (let ch = 0; ch < channels; ch++) {
 
-				mixSamples(halfSecond);
-			}
+                const sourceData =
+                    sourceAudio.getChannelData(
+                        Math.min(
+                            ch,
+                            sourceAudio.numberOfChannels - 1
+                        )
+                    );
 
-			// Prevent clipping
-			normalize(output);
+                const outputData =
+                    output.getChannelData(ch);
 
-			// Convert to WAV
-			resultBlob = audioBufferToWav(output);
+                outputData[outputIndex] +=
+                    sourceData[sourceIndex] * 0.8;
+            }
+        }
 
-			downloadButton.disabled = false;
-			downloadButton.textContent =
-				"Download My Result!!";
+        // --------------------------------------------------
+        // THEN REPEAT ONLY THE LAST 0.5 SECONDS
+        // OF THAT 1 SECOND
+        // --------------------------------------------------
 
-			await audioContext.close();
+        let outputPosition =
+            Math.floor(sampleRate * 1.0);
 
-		} catch (error) {
-			console.error(error);
+        while (outputPosition < output.length) {
 
-			downloadButton.disabled = false;
-			downloadButton.textContent =
-				"Download My Result!!";
+            for (
+                let i = 0;
+                i < halfSecond &&
+                outputPosition < output.length;
+                i++
+            ) {
 
-			alert("Error: " + error.message);
-		}
-	});
+                const sourceIndex =
+                    repeatStart + i;
 
-	downloadButton.addEventListener("click", () => {
-		if (!resultBlob) {
-			alert("Choose an MP3 first!");
-			return;
-		}
+                const outputIndex =
+                    outputPosition +
+                    Math.floor(
+                        i *
+                        sampleRate /
+                        sourceRate
+                    );
 
-		const url = URL.createObjectURL(resultBlob);
+                if (
+                    sourceIndex >= sourceAudio.length ||
+                    outputIndex >= output.length
+                ) {
+                    break;
+                }
 
-		const link = document.createElement("a");
-		link.href = url;
-		link.download = "phonk-result.wav";
+                for (
+                    let ch = 0;
+                    ch < channels;
+                    ch++
+                ) {
 
-		document.body.appendChild(link);
-		link.click();
-		link.remove();
+                    const sourceData =
+                        sourceAudio.getChannelData(
+                            Math.min(
+                                ch,
+                                sourceAudio.numberOfChannels - 1
+                            )
+                        );
 
-		setTimeout(() => URL.revokeObjectURL(url), 1000);
-	});
+                    const outputData =
+                        output.getChannelData(ch);
 
-	function normalize(buffer) {
-		let peak = 0;
+                    outputData[outputIndex] +=
+                        sourceData[sourceIndex] * 0.8;
+                }
+            }
 
-		for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
-			const data = buffer.getChannelData(ch);
+            outputPosition +=
+                Math.floor(
+                    sampleRate * 0.5
+                );
+        }
 
-			for (let i = 0; i < data.length; i++) {
-				peak = Math.max(peak, Math.abs(data[i]));
-			}
-		}
+        // Prevent clipping
+        normalize(output);
 
-		if (peak <= 1) return;
+        // Convert to WAV
+        resultBlob = audioBufferToWav(output);
 
-		const multiplier = 0.98 / peak;
+        downloadButton.disabled = false;
+        downloadButton.textContent =
+            "Download My Result!!";
 
-		for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
-			const data = buffer.getChannelData(ch);
+        await audioContext.close();
 
-			for (let i = 0; i < data.length; i++) {
-				data[i] *= multiplier;
-			}
-		}
-	}
+    } catch (error) {
+        console.error(error);
 
-	function audioBufferToWav(buffer) {
-		const channels = buffer.numberOfChannels;
-		const sampleRate = buffer.sampleRate;
-		const samples = buffer.length;
-		const bytesPerSample = 2;
-		const blockAlign = channels * bytesPerSample;
-		const dataSize = samples * blockAlign;
+        downloadButton.disabled = false;
+        downloadButton.textContent =
+            "Download My Result!!";
 
-		const arrayBuffer =
-			new ArrayBuffer(44 + dataSize);
+        alert("Error: " + error.message);
+    }
+});
 
-		const view = new DataView(arrayBuffer);
 
-		writeString(view, 0, "RIFF");
-		view.setUint32(4, 36 + dataSize, true);
-		writeString(view, 8, "WAVE");
+// --------------------------------------------------
+// DOWNLOAD
+// --------------------------------------------------
 
-		writeString(view, 12, "fmt ");
-		view.setUint32(16, 16, true);
-		view.setUint16(20, 1, true);
-		view.setUint16(22, channels, true);
-		view.setUint32(24, sampleRate, true);
-		view.setUint32(
-			28,
-			sampleRate * blockAlign,
-			true
-		);
-		view.setUint16(32, blockAlign, true);
-		view.setUint16(34, 16, true);
+downloadButton.addEventListener("click", () => {
 
-		writeString(view, 36, "data");
-		view.setUint32(40, dataSize, true);
+    if (!resultBlob) {
+        alert("Choose an MP3 first!");
+        return;
+    }
 
-		let offset = 44;
+    const url = URL.createObjectURL(resultBlob);
 
-		for (let i = 0; i < samples; i++) {
-			for (let ch = 0; ch < channels; ch++) {
-				let sample =
-					buffer.getChannelData(ch)[i];
+    const link = document.createElement("a");
 
-				sample =
-					Math.max(-1, Math.min(1, sample));
+    link.href = url;
+    link.download = "phonk-result.wav";
 
-				view.setInt16(
-					offset,
-					sample < 0
-						? sample * 0x8000
-						: sample * 0x7FFF,
-					true
-				);
+    document.body.appendChild(link);
 
-				offset += 2;
-			}
-		}
+    link.click();
 
-		return new Blob(
-			[arrayBuffer],
-			{ type: "audio/wav" }
-		);
-	}
+    link.remove();
 
-	function writeString(view, offset, string) {
-		for (let i = 0; i < string.length; i++) {
-			view.setUint8(
-				offset + i,
-				string.charCodeAt(i)
-			);
-		}
-	}
+    setTimeout(() => {
+        URL.revokeObjectURL(url);
+    }, 1000);
+});
+
+
+// --------------------------------------------------
+// NORMALIZE
+// --------------------------------------------------
+
+function normalize(buffer) {
+
+    let peak = 0;
+
+    for (
+        let ch = 0;
+        ch < buffer.numberOfChannels;
+        ch++
+    ) {
+        const data =
+            buffer.getChannelData(ch);
+
+        for (
+            let i = 0;
+            i < data.length;
+            i++
+        ) {
+            peak = Math.max(
+                peak,
+                Math.abs(data[i])
+            );
+        }
+    }
+
+    if (peak <= 1)
+        return;
+
+    const multiplier =
+        0.98 / peak;
+
+    for (
+        let ch = 0;
+        ch < buffer.numberOfChannels;
+        ch++
+    ) {
+        const data =
+            buffer.getChannelData(ch);
+
+        for (
+            let i = 0;
+            i < data.length;
+            i++
+        ) {
+            data[i] *= multiplier;
+        }
+    }
+}
+
+
+// --------------------------------------------------
+// AUDIO BUFFER → WAV
+// --------------------------------------------------
+
+function audioBufferToWav(buffer) {
+
+    const channels =
+        buffer.numberOfChannels;
+
+    const sampleRate =
+        buffer.sampleRate;
+
+    const samples =
+        buffer.length;
+
+    const bytesPerSample = 2;
+
+    const blockAlign =
+        channels * bytesPerSample;
+
+    const dataSize =
+        samples * blockAlign;
+
+    const arrayBuffer =
+        new ArrayBuffer(44 + dataSize);
+
+    const view =
+        new DataView(arrayBuffer);
+
+    writeString(view, 0, "RIFF");
+
+    view.setUint32(
+        4,
+        36 + dataSize,
+        true
+    );
+
+    writeString(view, 8, "WAVE");
+
+    writeString(view, 12, "fmt ");
+
+    view.setUint32(
+        16,
+        16,
+        true
+    );
+
+    view.setUint16(
+        20,
+        1,
+        true
+    );
+
+    view.setUint16(
+        22,
+        channels,
+        true
+    );
+
+    view.setUint32(
+        24,
+        sampleRate,
+        true
+    );
+
+    view.setUint32(
+        28,
+        sampleRate * blockAlign,
+        true
+    );
+
+    view.setUint16(
+        32,
+        blockAlign,
+        true
+    );
+
+    view.setUint16(
+        34,
+        16,
+        true
+    );
+
+    writeString(view, 36, "data");
+
+    view.setUint32(
+        40,
+        dataSize,
+        true
+    );
+
+    let offset = 44;
+
+    for (let i = 0; i < samples; i++) {
+
+        for (
+            let ch = 0;
+            ch < channels;
+            ch++
+        ) {
+
+            let sample =
+                buffer.getChannelData(ch)[i];
+
+            sample =
+                Math.max(
+                    -1,
+                    Math.min(1, sample)
+                );
+
+            view.setInt16(
+                offset,
+                sample < 0
+                    ? sample * 0x8000
+                    : sample * 0x7FFF,
+                true
+            );
+
+            offset += 2;
+        }
+    }
+
+    return new Blob(
+        [arrayBuffer],
+        { type: "audio/wav" }
+    );
+}
+
+
+function writeString(view, offset, string) {
+
+    for (
+        let i = 0;
+        i < string.length;
+        i++
+    ) {
+        view.setUint8(
+            offset + i,
+            string.charCodeAt(i)
+        );
+    }
+}
 </script>
